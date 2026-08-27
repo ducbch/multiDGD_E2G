@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multiDGD_E2G"
+version = "0.1.0"
+description = "Genome-wide enhancer-gene linking via multiDGD in-silico perturbation"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "Duc Nguyen" }]
+
+# Runs on top of a trained multiDGD model, so it shares multiDGD's (2022-era) stack.
+# multiDGD itself is expected to be installed in the environment (see README); it is not
+# pinned here to avoid a hard version lock, but the tested combination is torch 1.13.1 /
+# numpy 1.23.5 / anndata 0.8.0 on Python 3.10.
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "anndata",
+]
+
+[project.optional-dependencies]
+# multiDGD is the model backend; install it separately (pinned deps) into the same env:
+#   pip install multiDGD@git+https://github.com/Center-for-Health-Data-Science/multiDGD
+model = ["multiDGD"]
+# MuData ingest (io.read_h5mu / `prep --mudata`) is optional:
+mudata = ["mudata"]
+# to run the visualization notebook (workflow/visualize_run.ipynb):
+viz = ["jupyter", "matplotlib", "seaborn"]
+
+[project.scripts]
+multidgd-e2g = "multidgd_e2g.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/multidgd_e2g"]

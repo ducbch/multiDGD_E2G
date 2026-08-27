@@ -1,0 +1,22 @@
+# byte-compiled / caches
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# docs: track the READMEs (top-level + per-folder usage); ignore every other markdown
+# (LIMITATIONS.md, notes, change logs, ...)
+*.md
+!README.md
+!DEEP_README.md
+!EXAMPLES_README.md
+!WORKFLOW_README.md
+
+# run artifacts (trained models, delta caches, link tables) live outside the repo
+examples/.model_cache/
+examples/model/
+examples/expected_output/
+examples/python_api_gene2peak.tsv
