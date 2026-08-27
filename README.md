@@ -72,7 +72,10 @@ conda create -n multidgd-e2g python=3.10 -y && conda activate multidgd-e2g
 pip install multiDGD@git+https://github.com/Center-for-Health-Data-Science/multiDGD
 
 # multiDGD_E2G
-pip install -e /path/to/multiDGD_E2G
+pip install git+https://github.com/ducbch/multiDGD_E2G
+
+# ...or for a local/editable checkout:
+#   git clone https://github.com/ducbch/multiDGD_E2G && pip install -e multiDGD_E2G
 ```
 
 ### Verify
