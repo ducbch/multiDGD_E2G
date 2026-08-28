@@ -8,8 +8,9 @@ single-cell multimodal (RNA + ATAC) data, using in-silico perturbation of a trai
 silences a feature, refits the per-cell latent, decodes, and measures the predicted change in
 the partner modality — then scores that change into a calibrated link statistic. multiDGD
 introduced this perturbation idea as a **proof of concept** (per-gene, small scale); multiDGD_E2G
-develops it into a **scalable, genome-wide** tool by running the perturbation in cell chunks so
-GPU memory is bounded by the chunk size rather than the cell count.
+develops it into a usable tool with **two** additions: (1) a **cell-batched perturbation** that
+runs it genome-wide with bounded GPU memory, and (2) an **accessibility-matched null** that keeps
+the ranking from being dominated by peak accessibility.
 
 Method background: Schuster et al., *Nat Commun* 15, 10031 (2024),
 [doi:10.1038/s41467-024-53340-z](https://doi.org/10.1038/s41467-024-53340-z).
@@ -19,21 +20,17 @@ Method background: Schuster et al., *Nat Commun* 15, 10031 (2024),
 ## Why multiDGD_E2G?
 
 A trained multiDGD model is an encoder-less deep generative model: each cell's latent is a free
-parameter under a Gaussian-Mixture prior, and a shared decoder maps it to per-modality softmax
-outputs (negative-binomial mean = library × softmax share). Silencing a feature and reading the
-model's predicted response in the other modality is a natural way to propose regulatory links.
+parameter under a Gaussian-mixture prior, and one shared decoder turns it into the model's
+predicted RNA and ATAC signal for that cell. Silencing a feature and reading the model's predicted
+response in the *other* modality is a natural way to propose regulatory links — multiDGD's proof of
+concept.
 
-Running this genome-wide is memory-bound: each perturbation decodes the model's output over all
-features for all cells (an `n_cells × n_peaks` softmax), repeated across tens of thousands of perturbations —
-one per **silenced feature** (every gene for `gene2peak`, every peak
-for `peak2gene`). Materializing that whole decode exceeds GPU memory at realistic cell counts.
-
-multiDGD_E2G runs the perturbation in **cell chunks**: the count matrix stays on CPU, each decode
-is computed per chunk, and the per-cell mean change is accumulated across chunks. Peak GPU memory
-then scales with the chunk size rather than the cell count (see [Scalability](#scalability)), and
-the chunked result matches the whole-matrix result. The model, decoder, and training are
-multiDGD's; multiDGD_E2G adds the scalable perturbation, a calibrated significance score, and
-peak-gene I/O, with every multiDGD-internal call isolated in one adapter module.
+Two practical problems stand between that idea and a genome-wide tool: the perturbation's decode is
+too large for an ordinary GPU, and its raw effect is dominated by how accessible each peak already
+is. [Scalability](#scalability) and
+[Removing the accessibility bias](#removing-the-accessibility-bias-matched-null) are how
+multiDGD_E2G solves each. Everything else — model, decoder, training — is multiDGD's, wrapped
+behind a single adapter module, plus a calibrated significance score and peak-gene I/O.
 
 ---
 
@@ -51,6 +48,31 @@ same analyses run on a 48 GB card. Measured on brain multiome data (`gene2peak`,
 
 The chunked result is numerically equivalent to the whole-matrix result; a runtime reference and
 the equivalence details are in [DEEP_README.md](DEEP_README.md).
+
+---
+
+## Removing the accessibility bias (matched null)
+
+The raw perturbation effect is confounded by how accessible a peak already is. The model predicts
+each peak's accessibility as a fraction of the cell's total ATAC signal (the fractions sum to 1),
+so silencing a gene shifts most of the change onto the peaks that are already most accessible. The
+raw effect size (`|delta|`) is therefore largest right at the TSS and decays to about a third
+within 2 kb — a ranking **dominated by promoters and other highly accessible peaks** rather than
+distal enhancers. multiDGD notes the same issue (`delta` "is not independent of mean availability",
+Schuster et al. 2024, Supplementary Fig. 21) but does not correct for it.
+
+multiDGD_E2G corrects it with an **accessibility-matched null** (`--bg matched`, the **default**): a
+peak's effect is z-scored against other peaks of the **same predicted baseline accessibility**,
+instead of against random distal peaks. A highly accessible promoter peak is then judged only
+against equally accessible peaks, so it is no longer called significant just for being accessible —
+the same control Signac's `LinkPeaks` and FigR apply to their correlations. The result: the
+association score is **flat with distance to the TSS**, and links are no longer promoter-dominated.
+The alternative `--bg random` skips this correction and is kept only for benchmark comparison.
+
+See [DEEP_README](DEEP_README.md) for the exact procedure and how baseline accessibility is defined;
+the [workflow notebook](workflow/) shows a worked, eQTL-validated example (a distal enhancer the
+random null misses). Perturbation scores are still modest predictors genome-wide, so treat ranked
+links as candidates to confirm with orthogonal evidence.
 
 ---
 
@@ -147,7 +169,7 @@ and writes the link table:
 
 ```bash
 multidgd-e2g link \
-  --train \                       # fit a new model (first run); --load reuses it afterwards
+  --train \                       # first run fits the model
   --input-dir  export_dir \
   --save-dir   model_dir \        # model checkpoint + delta cache are written here
   --model-name dgd_mydata \
@@ -159,7 +181,7 @@ multidgd-e2g link \
 
 ### 3. Reuse the trained model (`--load`)
 
-Later runs reuse the checkpoint — no retraining — e.g. the other direction:
+Later runs skip training — e.g. the other direction:
 
 ```bash
 multidgd-e2g link --load --input-dir export_dir --save-dir model_dir --model-name dgd_mydata \
@@ -220,18 +242,16 @@ more silenced features (peaks ≫ genes), so it is proportionally slower.
 
 | Background | Description |
 |------------|-------------|
-| `matched` (default) | Background drawn from the candidate's own baseline-accessibility bin (the model's softmax share), controlling for peak accessibility — the same control Signac/FigR apply. Prevents high-accessibility promoter peaks from scoring as significant merely for being accessible. |
-| `random` | Each candidate's delta is z-scored against a random sample of distal (non-cis) response features. More sensitive, but its rankings are inflated by promoter/high-accessibility peaks; use for benchmark parity with parametric methods, not as the discovery default. |
+| `matched` (default) | Compare each peak's effect to peaks of the same predicted accessibility — controls for the accessibility bias (see [Removing the accessibility bias](#removing-the-accessibility-bias-matched-null)). |
+| `random` | Compare to random distal peaks. More sensitive, but promoter-inflated; for benchmark comparison, not the discovery default. |
 
 ### `--cell-batch` — memory/speed knob
 
 Cells per decode chunk: larger uses more GPU memory but runs faster (fewer chunks); the result
 is identical regardless of the value. Cell types with `n_cells ≤ cell_batch` run in one chunk.
 
-### `--load` / `--train`, `--reuse-deltas`
-
-`--load` reuses a saved model checkpoint; `--train` fits a new one. `--reuse-deltas` skips the
-model entirely and re-scores from the cached deltas on CPU.
+(`--train` / `--load` / `--reuse-deltas` are shown in [Quick Start](#quick-start); run
+`multidgd-e2g link --help` for the full flag list.)
 
 ---
 
@@ -254,20 +274,10 @@ model entirely and re-scores from the cached deltas on CPU.
 
 ---
 
-## In-silico perturbation and scoring (summary)
+## Method details
 
-- **Perturbation.** For each silenced feature: zero its counts, take one gradient step on the per-cell
-  latent to fit the counterfactual, decode, and record the mean predicted change (`delta`) in
-  every partner-modality feature — over cells where that feature is detected. Run in cell chunks
-  so memory is bounded; the chunked result equals the whole-matrix result up to float round-off.
-- **Scoring.** An empirical background null: z-score each cis target's `delta` against the
-  candidate's own accessibility bin (`--bg matched`, the default) or a background of random
-  distal features (`--bg random`). `pvalue` is 1-sided on the
-  activating tail (silencing an activator lowers the partner's predicted signal), with a
-  2-sided variant and BH FDR. No distributional assumption on the raw `delta`.
-
-Full details, the exactness argument, and a performance/memory reference are in
-[DEEP_README.md](DEEP_README.md).
+The perturbation, the exactness argument for cell-batching, the scoring math, and a
+performance/memory reference are in [DEEP_README.md](DEEP_README.md).
 
 ---
 

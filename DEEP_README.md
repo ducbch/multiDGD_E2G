@@ -2,8 +2,8 @@
 
 multiDGD_E2G performs genome-wide enhancer-gene linking by in-silico perturbation of a trained
 [multiDGD](https://github.com/Center-for-Health-Data-Science/multiDGD) model. This document
-describes what the perturbation measures, the scaling problem it solves, the cell mini-batching
-engine and why it is exact, the calibrated scoring, and a performance/memory reference.
+describes what the perturbation measures, how it is scaled genome-wide with an exact cell
+mini-batching engine, the calibrated scoring, and a performance reference.
 
 ---
 
@@ -15,10 +15,12 @@ free parameter optimized directly, and the latent prior is a **Gaussian Mixture 
 captures cell-state clusters better than a single Gaussian and, with no encoder to feed, makes
 the model data-efficient and able to handle genome-wide features without selection). A single
 **shared decoder** (a small feed-forward neural network / MLP, plus a disentangled correction
-latent for batch covariates) maps `z_i` to two per-modality output heads, each a **softmax over
-that modality's features** (so each feature receives a share of the total); the
-negative-binomial mean of a feature is `library_i × softmax_share`. There is no cross-cell
-operation in the decoder — each cell's output depends only on its own latent.
+latent for batch covariates) maps `z_i` to two per-modality outputs, one for RNA and one for ATAC.
+Each output is a **fraction per feature that sums to 1 across the modality** (a softmax): the
+model's predicted share of that cell's signal for each gene or peak — call it the feature's
+**predicted accessibility** (peaks) or expression fraction (genes). A feature's expected count is
+`library_i × this fraction`. There is no cross-cell operation in the decoder — each cell's output
+depends only on its own latent.
 
 An *in-silico perturbation* asks a counterfactual question: **if this feature were silenced,
 what would the model predict for the others?** Concretely, set a chosen feature's counts to
@@ -29,30 +31,23 @@ at genome scale and turns the response into a calibrated link statistic.
 
 ---
 
-## 2. The scaling problem
+## 2. Scaling the perturbation genome-wide
 
-The response to a single silencing is a full decode: an `n_cells × n_peaks` softmax (plus the
+The response to a single silencing is a full decode: an `n_cells × n_peaks` output matrix (plus the
 `n_cells × n_genes` RNA head). For a large cell type that single tensor is tens of gigabytes
 (e.g. 40,000 cells × 176,000 peaks × 4 bytes ≈ 28 GB), and a genome-wide analysis repeats the
 perturbation for **every candidate feature** (each silenced in turn) — ~20,000 genes for `gene2peak`,
 ~100,000+ peaks for `peak2gene`. Materializing the whole count matrix and the whole decode on the
 GPU for each such perturbation exhausts memory even on an 80 GB card.
 
-Two observations make this tractable without changing the result:
+Two properties make this tractable without changing the result: the decoder is per-cell (§1), so a
+decode can run on any subset of cells and be recombined; and the quantity of interest — the mean
+change over cells — is a **linear reduction** (a sum over a count), so chunk sums combine exactly.
 
-1. The decoder is **per-cell**, so a decode can be computed on any subset of cells and the
-   pieces combined.
-2. The quantity of interest, the mean change over cells, is a **linear reduction** — a sum
-   divided by a count — so chunk sums combine exactly.
+The engine (`compute_deltas` in `perturbation.py`) processes each silenced feature in cell chunks
+of size `cell_batch`.
 
----
-
-## 3. The mini-batched perturbation engine (over cells)
-
-`compute_deltas` (in `perturbation.py`) processes each silenced feature as follows, in cell chunks of
-size `cell_batch`.
-
-### 3.1 The silencing step
+### 2.1 The silencing step
 
 For a silenced feature `f`:
 
@@ -70,7 +65,7 @@ For a silenced feature `f`:
   where the silenced feature is nonzero). After the last chunk, `delta = sum_delta / count`.
 - **Restore.** The latent is reset to the saved baseline `z0` before the next feature.
 
-### 3.2 Why the mini-batching is exact
+### 2.2 Why the mini-batching is exact
 
 The chunked computation is not an approximation. The decoder has **no BatchNorm or other
 cross-cell op**, so a cell's decode is identical whether it is computed alone or in a batch; the
@@ -88,29 +83,28 @@ Verified on two cell types (whole vs small `cell_batch`, scored under the identi
 Per-pair score differences are float round-off (medians ~1e-6); rankings are identical. The
 difference grows gently with chunk count (more summation terms) but stays negligible.
 
-### 3.3 Memory
+### 2.3 Memory
 
 Peak GPU memory is dominated by the per-chunk decodes and scales as roughly
-`2 × cell_batch × n_features × 4 bytes`, independent of the total cell count. Measured peaks:
+`2 × cell_batch × n_features × 4 bytes`, independent of the total cell count — so batching is what
+makes large cell types fit. Measured peak GPU, whole-matrix vs batched:
 
-| Cell type | cells | peaks | `cell_batch` | peak GPU |
-|-----------|------:|------:|-------------:|---------:|
-| Astrocytes | 6,255 | 102,482 | whole (6,255) | 9.52 GB |
-| Astrocytes | 6,255 | 102,482 | 512 | **1.05 GB** (9.1×) |
-| Oligodendrocytes | 34,784 | 107,651 | 8,192 | 12.64 GB |
-| Excitatory | 39,884 | 176,001 | 8,192 | 23.36 GB |
+| Cell type | cells | peaks | whole-matrix | batched |
+|-----------|------:|------:|--------------|---------|
+| Astrocytes | 6,255 | 102,482 | 9.52 GB | 1.05 GB (`cell_batch=512`, 9.1× smaller) |
+| Oligodendrocytes | 34,784 | 107,651 | ~80 GB — **exceeds an A100 (80 GB)** | 12.64 GB — fits an A40/L40 (48 GB) |
+| Excitatory | 39,884 | 176,001 | ~85 GB — **exceeds an A100 (80 GB)** | 23.36 GB — fits an A40/L40 (48 GB) |
 
-The two largest cell types require an unbatched peak of ~80-85 GB — out of reach of an 80 GB
-card — but fit a 48 GB card comfortably when batched, with headroom to raise `cell_batch` for
-speed.
+The two largest cell types cannot run whole-matrix even on an 80 GB card, but batch comfortably onto
+a 48 GB card, with headroom to raise `cell_batch` for speed.
 
 ---
 
-## 4. Calibrated association scoring
+## 3. Calibrated association scoring
 
 `score_from_deltas` (in `scoring.py`) turns the per-feature deltas into a per-pair significance
-statistic. The design uses an empirical background null (accessibility-matched by default;
-optionally random distal features), so the raw `delta` need not follow any parametric distribution.
+statistic against an empirical background null (selected with `--bg`; see below), so the raw
+`delta` need not follow any parametric distribution.
 
 For a silenced feature with cis targets and a background set of distal response features:
 
@@ -121,24 +115,56 @@ For a silenced feature with cis targets and a background set of distal response 
   `2·P(Z > |z|)`.
 - **FDR** Benjamini-Hochberg over all pairs.
 
-**Background choices** (`--bg`):
+The two `--bg` backgrounds — `matched` (default) and `random` — and why the default matters are
+covered next. Scoring is pure CPU and **null-agnostic with respect to the cached deltas**: changing
+`--bg`, `n_bg`, the number of bins, or the sidedness re-runs only this step (Section 5).
 
-- `matched` (default) — bin response features by `log(p0)`, where `p0` is the model's baseline
-  predicted softmax share (the scale the delta lives on), and draw each candidate's background from
-  its own bin. This controls for baseline accessibility — the same confounder Signac/FigR match on —
-  so a high-accessibility promoter peak is compared against other high-accessibility peaks rather
-  than random distal ones, and is not called significant merely for being accessible.
-- `random` — a random sample of `n_bg` non-cis response features per silenced feature. This also
-  absorbs the global softmax mass shift that silencing induces across all features. It is more
-  sensitive, but does **not** control for accessibility, so its rankings are inflated by
-  promoter/high-accessibility peaks; kept for benchmark parity with the parametric methods.
+### Accessibility bias and the matched null
 
-Scoring is pure CPU and **null-agnostic with respect to the cached deltas** — changing `--bg`,
-`n_bg`, the number of bins, or the sidedness re-runs only this step (Section 6).
+**The bias.** The raw perturbation effect `ΔX̂` scales with a peak's *baseline accessibility*.
+Silencing a gene moves its high-accessibility, promoter-proximal peaks the most, so the raw
+`|ΔX̂|` is largest at the TSS and decays to roughly a third within ~2 kb — a ranking dominated by
+promoters and other highly accessible peaks. This is a known limitation of the underlying method: multiDGD's
+paper reports that "ΔX̂ is not independent of mean availability" (Schuster et al., *Nat Commun*
+2024, Supplementary Fig. 21).
+
+**Why it happens.** As in Section 1, the ATAC output is a softmax, so for cell *i* peak *j*'s
+predicted accessibility is a fraction `ŷ_ij ∈ (0,1)` with `Σ_j ŷ_ij = 1`. The perturbation records
+the mean change in that fraction,
+
+    ΔX̂_gj = mean_i ( ŷ^KO_ij − ŷ^0_ij ),
+
+and because the fractions must always sum to 1, the change redistributed by silencing is
+proportionally larger where the baseline fraction is larger — so already-accessible peaks carry
+larger `|ΔX̂|` whether or not there is a true regulatory link.
+
+**`p0` — the matching variable (a *predicted* quantity, not empirical ATAC).** The right scale to
+correct on is therefore the model's own predicted baseline accessibility. `compute_deltas` returns
+
+    p0_j = (1/N) · Σ_i ŷ^0_ij ,
+
+the mean over all `N` cells of peak `j`'s **baseline (unperturbed) predicted accessibility**,
+obtained by decoding each cell's baseline latent `z^0`. So `p0` is a model prediction — a fraction
+on the order of `1/n_peaks` (~1e-4) — on the *same* scale as `ΔX̂`. It is **not** the empirical
+fraction of cells with an ATAC count in the peak; matching on the model's predicted accessibility
+is what cancels the accessibility-driven magnitude baked into `ΔX̂`.
+
+**The matched null (`--bg matched`, the default).** Scoring bins peaks by `log p0` into
+`B = min(25, n_resp / (2·n_bg))` quantile bins. For a candidate (silenced feature `g`, cis peak `j`):
+
+1. draw the background from peaks in `j`'s own `log p0` bin (excluding `g`'s cis peaks; widen to
+   neighbouring bins if fewer than `n_bg` remain) → background deltas `d_bg`;
+2. `z_gj = ( mean(d_bg) − ΔX̂_gj ) / sd(d_bg)`, and `pvalue = P(Z > z_gj)` (one-sided).
+
+Because `j` is compared only against peaks of **equal predicted accessibility**, a large `|ΔX̂|`
+that is merely a consequence of high `p0` no longer reads as significant. Empirically this makes the
+association score `|z|` **flat with distance to the TSS** — the raw `|ΔX̂|` decay within 2 kb
+disappears — so links are no longer dominated by promoters/abundant peaks. The `--bg random` null
+skips this correction (background = random distal peaks) and is kept only for benchmark parity.
 
 ---
 
-## 5. Directions: gene2peak and peak2gene
+## 4. Directions: gene2peak and peak2gene
 
 The model is direction-agnostic; both directions reuse the same trained model and learned
 representations — no retraining.
@@ -148,12 +174,12 @@ representations — no retraining.
 - **peak2gene** — silence a peak (ATAC), read the gene (RNA) response; background sampled over
   genes. Silenced feature = a peak.
 
-Because runtime is `O(n_silenced × decode_cost)` (Section 7), `peak2gene` is proportionally
-slower than `gene2peak` (peaks outnumber genes several-fold).
+`peak2gene` runs proportionally slower than `gene2peak` — it silences every peak rather than every
+gene, and peaks outnumber genes several-fold (see runtime in Section 6).
 
 ---
 
-## 6. Delta caching
+## 5. Delta caching
 
 The expensive GPU output — the per-feature delta matrix `D` (kept silenced features × response features),
 the baseline shares `p0`, and the feature names — is saved to
@@ -164,7 +190,7 @@ model configurations do not collide.
 
 ---
 
-## 7. Performance and memory reference
+## 6. Performance reference
 
 Runtime is `O(n_silenced × decode_cost)`, where `decode_cost ∝ n_cells × n_peaks`. The
 perturbation is a **sequential loop over silenced features** (each is a separate counterfactual refit), so
@@ -173,14 +199,13 @@ memory for speed: fewer chunks mean fewer decodes.
 
 Measured on 48 GB cards (A40/L40), `gene2peak`, `cell_batch = 8192`, batch-corrected, latent 20:
 
-| Cell type | cells | peaks | silenced | training | delta pass | total | peak GPU |
-|-----------|------:|------:|--------:|---------:|-----------:|------:|---------:|
-| Oligodendrocytes | 34,784 | 107,651 | 20,204 | 2.6 h | 7.5 h | 10.5 h | 12.64 GB |
-| Excitatory | 39,884 | 176,001 | 20,263 | 5.1 h | 15.4 h | 21.6 h | 23.36 GB |
+| Cell type | cells | peaks | silenced | training | delta pass | total |
+|-----------|------:|------:|--------:|---------:|-----------:|------:|
+| Oligodendrocytes | 34,784 | 107,651 | 20,204 | 2.6 h | 7.5 h | 10.5 h |
+| Excitatory | 39,884 | 176,001 | 20,263 | 5.1 h | 15.4 h | 21.6 h |
 
 Training and representation learning are multiDGD's own code (unaffected by batching); the delta
 pass is the perturbation engine. Two levers reduce the delta pass on large cell types (both
 exact): a **larger `cell_batch`** (fewer chunks) where GPU memory allows, and holding the
 baseline decode resident to avoid recomputing it per chunk (feasible on large-memory cards).
-Smaller cell types (`n_cells ≤ cell_batch`) run in a single chunk and finish in minutes to an
-hour.
+Smaller cell types (`n_cells ≤ cell_batch`) run in a single chunk.
