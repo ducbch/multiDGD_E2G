@@ -123,10 +123,12 @@ covered next. Scoring is pure CPU and **null-agnostic with respect to the cached
 
 **The bias.** The raw perturbation effect `ΔX̂` scales with a peak's *baseline accessibility*.
 Silencing a gene moves its high-accessibility, promoter-proximal peaks the most, so the raw
-`|ΔX̂|` is largest at the TSS and decays to roughly a third within ~2 kb — a ranking dominated by
-promoters and other highly accessible peaks. This is a known limitation of the underlying method: multiDGD's
-paper reports that "ΔX̂ is not independent of mean availability" (Schuster et al., *Nat Commun*
-2024, Supplementary Fig. 21).
+`|ΔX̂|` is largest at the TSS and decays to roughly a third within ~2 kb (multiDGD's own
+Supplementary Fig. 20B shows this curve), leaving a ranking dominated by promoters and other
+highly accessible peaks. multiDGD reports this confound but does not correct it: its Supplementary
+Fig. 21 shows that baseline accessibility *alone* predicts HiChIP enhancers about as well as `ΔX̂`
+does — that is, `ΔX̂` "is not independent of mean availability" (Schuster et al., *Nat Commun*
+2024).
 
 **Why it happens.** As in Section 1, the ATAC output is a softmax, so for cell *i* peak *j*'s
 predicted accessibility is a fraction `ŷ_ij ∈ (0,1)` with `Σ_j ŷ_ij = 1`. The perturbation records
