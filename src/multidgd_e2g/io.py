@@ -25,11 +25,25 @@ import scipy.sparse as sp
 
 def build_anndata(rna_counts, atac_counts, genes, peaks, barcodes, obs,
                   observable=None, covariate=None):
-    """Assemble the [RNA|ATAC] AnnData multiDGD expects.
+    """Assemble the concatenated [RNA|ATAC] AnnData that multiDGD expects.
 
-    rna_counts/atac_counts: (features x cells) sparse; genes/peaks/barcodes: name lists;
-    obs: DataFrame indexed like barcodes. `observable` (cell-type col) drives GMM components;
-    `covariate` (sample/batch col) becomes a multiDGD correction factor (prefixed covariate_).
+    Parameters
+    ----------
+    rna_counts, atac_counts : scipy.sparse matrix
+        Raw counts, features x cells (RNA then ATAC).
+    genes, peaks, barcodes : list of str
+        Feature and cell name lists.
+    obs : pandas.DataFrame
+        Cell metadata, indexed like ``barcodes``.
+    observable : str or None, optional
+        Cell-type column; its values drive the GMM components (default: a single "cells" group).
+    covariate : str or None, optional
+        Sample/batch column; copied to ``covariate_sample`` as a multiDGD correction factor.
+
+    Returns
+    -------
+    anndata.AnnData
+        Cells x [genes|peaks] with ``var['modality']`` set to GEX/ATAC.
     """
     import anndata as ad
     X = sp.hstack([rna_counts.T.tocsr(), atac_counts.T.tocsr()]).tocsr()
@@ -50,7 +64,19 @@ def build_anndata(rna_counts, atac_counts, genes, peaks, barcodes, obs,
 
 
 def read_export(in_dir):
-    """Read the flat export directory into (adata, genes, peaks, pairs_or_None)."""
+    """Read the flat export directory that ``link`` consumes.
+
+    Parameters
+    ----------
+    in_dir : str
+        Directory holding ``rna_counts.mtx``, ``atac_counts.mtx``, ``rna_features.txt``,
+        ``atac_features.txt``, ``barcodes.txt``, ``obs.csv``, and optionally ``pairs.csv``.
+
+    Returns
+    -------
+    tuple
+        ``(adata, genes, peaks, pairs)`` where ``pairs`` is a DataFrame or None if absent.
+    """
     import anndata as ad
     rna = scipy.io.mmread(os.path.join(in_dir, "rna_counts.mtx")).tocsr()    # genes x cells
     atac = scipy.io.mmread(os.path.join(in_dir, "atac_counts.mtx")).tocsr()  # peaks x cells
@@ -71,9 +97,27 @@ def read_export(in_dir):
 
 
 def assign_train_val_split(adata, train_fraction=0.8, seed=0, observable="observable"):
-    """Stratified train/validation split (no test label, so predict scores ALL cells).
+    """Assign a stratified train/validation split to ``adata.obs['train_val_test']``.
 
-    multiDGD requires a validation set (and it errors on the correction model without one).
+    No ``test`` label is used on purpose, so a later ``model.predict`` learns representations
+    over all cells. multiDGD requires a validation set (it errors on the correction model
+    without one), which is why the split is assigned here.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        Dataset to label in place.
+    train_fraction : float, optional
+        Fraction of cells labelled ``train``; the rest are ``validation`` (default 0.8).
+    seed : int, optional
+        Split seed (default 0).
+    observable : str, optional
+        Cell-type column to stratify on when it has >=2 cells per class (default "observable").
+
+    Returns
+    -------
+    anndata.AnnData
+        The same object, with ``obs['train_val_test']`` added.
     """
     from sklearn.model_selection import train_test_split
     n = adata.n_obs
@@ -91,11 +135,23 @@ def assign_train_val_split(adata, train_fraction=0.8, seed=0, observable="observ
 
 
 def candidate_pairs_by_distance(gene_tss, peaks, distance=250_000):
-    """Peaks within +/-`distance` of a gene TSS -> candidate (gene, peak) pairs.
+    """Pair each gene with the peaks whose center is within +/-``distance`` of its TSS.
 
-    gene_tss : DataFrame with columns [gene, chr, tss].
-    peaks    : DataFrame with columns [peak, chr, start, end] (peak id like 'chr1-100-200').
-    Returns a DataFrame [gene, peak]. Efficient per-chromosome via sorted searchsorted.
+    Runs per chromosome on sorted peak centers via ``searchsorted``.
+
+    Parameters
+    ----------
+    gene_tss : pandas.DataFrame
+        Columns ``[gene, chr, tss]``.
+    peaks : pandas.DataFrame
+        Columns ``[peak, chr, start, end]`` (peak id like ``chr1-100-200``).
+    distance : int, optional
+        Half-window around the TSS in base pairs (default 250,000).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Candidate pairs with columns ``[gene, peak]``.
     """
     pk = peaks.copy()
     pk["center"] = (pk["start"].astype(int) + pk["end"].astype(int)) // 2
@@ -120,7 +176,25 @@ _ATAC = {"ATAC", "atac", "Peaks", "peaks", "accessibility"}
 
 
 def _normalize_modality(adata):
-    """Ensure adata.var has a 'modality' column of 'GEX'/'ATAC' (from modality/feature_types)."""
+    """Normalize ``adata.var`` to carry a canonical GEX/ATAC ``modality`` column.
+
+    Reads from ``modality`` or ``feature_types`` and maps common aliases (RNA, Peaks, ...).
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        Object whose ``var`` is normalized in place.
+
+    Returns
+    -------
+    anndata.AnnData
+        The same object with ``var['modality']`` in {"GEX", "ATAC"}.
+
+    Raises
+    ------
+    ValueError
+        If no modality column exists or a label cannot be mapped to GEX/ATAC.
+    """
     col = "modality" if "modality" in adata.var else ("feature_types" if "feature_types" in adata.var else None)
     if col is None:
         raise ValueError("AnnData var needs a 'modality' or 'feature_types' column (GEX/ATAC).")
@@ -132,13 +206,37 @@ def _normalize_modality(adata):
 
 
 def read_h5ad(path):
-    """Read a single multi-modal AnnData (.h5ad); var must carry modality/feature_types."""
+    """Read a single multi-modal AnnData (.h5ad).
+
+    Parameters
+    ----------
+    path : str
+        Path to a ``.h5ad`` whose ``var`` carries ``modality`` or ``feature_types``.
+
+    Returns
+    -------
+    anndata.AnnData
+        With a normalized GEX/ATAC ``modality`` column.
+    """
     import anndata as ad
     return _normalize_modality(ad.read_h5ad(path))
 
 
 def read_h5mu(path, rna="rna", atac="atac"):
-    """Read a MuData (.h5mu) with RNA + ATAC modalities into one AnnData with var['modality']."""
+    """Read a MuData (.h5mu) with RNA + ATAC modalities into one concatenated AnnData.
+
+    Parameters
+    ----------
+    path : str
+        Path to the ``.h5mu`` file.
+    rna, atac : str, optional
+        Modality keys for the RNA and ATAC assays (defaults "rna" / "atac").
+
+    Returns
+    -------
+    anndata.AnnData
+        Cells x [genes|peaks] with ``var['modality']`` set.
+    """
     import anndata as ad
     import mudata
     md = mudata.read(path)
@@ -153,10 +251,29 @@ def read_h5mu(path, rna="rna", atac="atac"):
 
 
 def write_export(adata, out_dir, pairs=None, observable="observable", covariate=None):
-    """Write the flat export directory `link` reads, from a multi-modal AnnData.
+    """Write the flat export directory ``link`` reads, from a multi-modal AnnData.
 
-    Splits var['modality'] into RNA/ATAC (raw-count X expected), and writes counts (MatrixMarket),
-    feature/barcode lists, obs.csv (barcode + observable + optional covariate_sample), and pairs.csv.
+    Splits ``var['modality']`` into RNA/ATAC (raw-count ``X`` expected) and writes the counts
+    (MatrixMarket), feature and barcode lists, ``obs.csv`` (barcode + observable + optional
+    covariate_sample), and ``pairs.csv`` when pairs are supplied.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        Multi-modal object with raw counts in ``X``.
+    out_dir : str
+        Output directory (created if needed).
+    pairs : pandas.DataFrame or None, optional
+        Candidate ``[gene, peak]`` pairs to write as ``pairs.csv``.
+    observable : str, optional
+        Cell-type column to export (default "observable").
+    covariate : str or None, optional
+        Batch column to export as ``covariate_sample``.
+
+    Returns
+    -------
+    str
+        ``out_dir``.
     """
     adata = _normalize_modality(adata)
     os.makedirs(out_dir, exist_ok=True)
@@ -181,7 +298,18 @@ def write_export(adata, out_dir, pairs=None, observable="observable", covariate=
 
 
 def peaks_from_names(peak_names):
-    """Parse 'chr-start-end' peak ids into a DataFrame [peak, chr, start, end]."""
+    """Parse ``chr-start-end`` peak ids into coordinates.
+
+    Parameters
+    ----------
+    peak_names : iterable of str
+        Peak ids like ``chr1-100-200``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``[peak, chr, start, end]``.
+    """
     rows = []
     for p in peak_names:
         chrom, start, end = p.rsplit("-", 2)
@@ -190,7 +318,20 @@ def peaks_from_names(peak_names):
 
 
 def tss_from_gtf(gtf_path):
-    """Extract gene TSS from a GTF -> DataFrame [gene, chr, tss] (TSS = start on +, end on -)."""
+    """Extract each gene's TSS from a GTF (first occurrence per gene name).
+
+    TSS is the ``start`` on the + strand and the ``end`` on the - strand.
+
+    Parameters
+    ----------
+    gtf_path : str
+        Path to a GTF whose gene lines carry a ``gene_name`` attribute.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``[gene, chr, tss]``.
+    """
     import re
     name_re = re.compile(r'gene_name "([^"]+)"')
     seen, rows = set(), []
@@ -214,7 +355,27 @@ def tss_from_gtf(gtf_path):
 
 
 def build_groups(pairs, gene_row, peak_col, direction, max_silenced=0):
-    """Group candidate pairs by the silenced feature for a direction; return (groups, silenced_index, resp_index)."""
+    """Group candidate pairs by the silenced feature for a perturbation direction.
+
+    Parameters
+    ----------
+    pairs : pandas.DataFrame
+        Candidate ``[gene, peak]`` pairs.
+    gene_row : dict
+        Gene name -> within-RNA index.
+    peak_col : dict
+        Peak name -> within-ATAC index.
+    direction : str
+        ``"gene2peak"`` (silence genes, read peaks) or ``"peak2gene"``.
+    max_silenced : int, optional
+        Cap on the number of silenced features (0 = no cap).
+
+    Returns
+    -------
+    tuple
+        ``(groups, silenced_index, resp_index)`` where ``groups`` maps each silenced feature to
+        its target list, and the two index dicts map names to within-modality indices.
+    """
     pairs = pairs[pairs["gene"].isin(gene_row) & pairs["peak"].isin(peak_col)].copy()
     if direction == "gene2peak":
         groups = pairs.groupby("gene")["peak"].apply(list).to_dict()

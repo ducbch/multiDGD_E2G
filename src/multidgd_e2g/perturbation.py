@@ -56,6 +56,7 @@ def compute_deltas(adapter, groups, silenced_index, resp_index, direction,
     z0 = rep.z.detach().clone()                   # baseline latent (small)
 
     def chunks():
+        """Yield (start, stop) cell-row ranges of at most ``cell_batch`` cells each."""
         for lo in range(0, n, cell_batch):
             yield lo, min(lo + cell_batch, n)
 
@@ -152,6 +153,7 @@ def compute_cell_deltas(adapter, silenced, silenced_index, resp_cols, direction,
     z0 = rep.z.detach().clone()
 
     def chunks():
+        """Yield (start, stop) cell-row ranges of at most ``cell_batch`` cells each."""
         for lo in range(0, n, cell_batch):
             yield lo, min(lo + cell_batch, n)
 

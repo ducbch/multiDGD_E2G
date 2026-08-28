@@ -19,16 +19,48 @@ EPS = 1e-12
 
 def score_from_deltas(D, kept, p0, groups, resp_index, direction,
                       n_bg=500, seed=0, match_bg=True, n_bins=25, log=print):
-    """Turn per-silenced-feature deltas into per-pair z / p-values under the chosen null.
+    """Turn per-silenced-feature deltas into per-pair z-scores and p-values under a null.
 
-    match_bg=True (default): accessibility-matched background -- bin response features by log(p0)
-      (the model's baseline softmax share, the scale the delta lives on) and draw each
-      candidate's background from its own bin. Controls for peak accessibility (like Signac/FigR),
-      so high-accessibility promoter peaks are not scored as significant merely for being accessible.
-    match_bg=False: random distal-feature background (per silenced feature). More sensitive, but its
-      rankings are inflated by promoter/high-accessibility peaks; kept for benchmark parity.
+    Each candidate (cis) target's delta is z-scored against a background set of response
+    features: ``z = (mean(delta_bg) - delta) / sd(delta_bg)``, so an activating link
+    (delta < 0) yields a large positive z. The p-value is the one-sided activating tail, with
+    a two-sided variant also returned.
 
-    Returns a list of dict records: peak, gene, delta, zscore, pvalue, twosided_pvalue.
+    Parameters
+    ----------
+    D : numpy.ndarray
+        Float32 array (n_kept x n_resp) of mean deltas, one row per silenced feature.
+    kept : list
+        Silenced-feature names in ``D`` row order.
+    p0 : numpy.ndarray
+        Baseline predicted softmax share per response feature (used only when ``match_bg``).
+    groups : dict
+        ``{silenced_feature -> [response_feature, ...]}`` candidate targets to score.
+    resp_index : dict
+        Response-feature name -> column index in ``D``.
+    direction : str
+        ``"gene2peak"`` or ``"peak2gene"`` (sets which name becomes peak vs gene).
+    n_bg : int, optional
+        Background response features drawn per candidate (default 500).
+    seed : int, optional
+        Seed for background sampling (default 0).
+    match_bg : bool, optional
+        If True (default), draw the background from the candidate's own baseline-accessibility
+        bin (log ``p0``), controlling for peak accessibility like Signac/FigR, so a
+        high-accessibility promoter peak is not called significant merely for being accessible.
+        If False, use a random distal-feature background per silenced feature -- more sensitive,
+        but its rankings are inflated by promoter/high-accessibility peaks (kept for benchmark
+        parity).
+    n_bins : int, optional
+        Number of log-``p0`` bins for the matched null (default 25; capped by feature count).
+    log : callable, optional
+        Logging function (default ``print``).
+
+    Returns
+    -------
+    list of dict
+        One record per scored pair with keys: ``peak``, ``gene``, ``delta``, ``zscore``,
+        ``pvalue`` (one-sided), ``twosided_pvalue``.
     """
     n_resp = D.shape[1]
     rng = np.random.default_rng(seed)
@@ -84,8 +116,21 @@ def score_from_deltas(D, kept, p0, groups, resp_index, direction,
 
 
 def bh_fdr(pvals):
-    """Benjamini-Hochberg adjusted p-values (q-values). Rank factor is m/i with i the
-    ascending rank (1..m); the reverse-cumulative-min enforces monotonicity."""
+    """Benjamini-Hochberg adjusted p-values (q-values).
+
+    Matches R's ``p.adjust(method="BH")``: the rank factor is ``m / i`` with ``i`` the
+    ascending rank (1..m), and a reverse cumulative minimum enforces monotonicity.
+
+    Parameters
+    ----------
+    pvals : array_like
+        Raw p-values.
+
+    Returns
+    -------
+    numpy.ndarray
+        BH q-values in the input order, clipped to [0, 1].
+    """
     p = np.asarray(pvals, float)
     m = len(p)
     order = p.argsort()
@@ -97,7 +142,23 @@ def bh_fdr(pvals):
 
 
 def records_to_p2g(records):
-    """Format scored records into the standard p2g DataFrame (peak coords parsed from the id)."""
+    """Format scored records into the standard p2g DataFrame.
+
+    Adds BH FDR (one- and two-sided), the ``score`` (-log10 p) ranking column, the ``link_dir``
+    sign, and the peak coordinates parsed from the ``chr-start-end`` id.
+
+    Parameters
+    ----------
+    records : list of dict
+        Output of :func:`score_from_deltas`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: ``peak``, ``peak_chr``, ``peak_start``, ``peak_end``, ``gene``, ``score``,
+        ``delta``, ``zscore``, ``pvalue``, ``fdr``, ``twosided_pvalue``, ``twosided_fdr``,
+        ``link_dir`` (+1 activating / -1 repressive).
+    """
     df = pd.DataFrame.from_records(records)
     df["fdr"] = bh_fdr(df["pvalue"].values)
     df["twosided_fdr"] = bh_fdr(df["twosided_pvalue"].values)

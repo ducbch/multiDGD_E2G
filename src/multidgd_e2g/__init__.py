@@ -19,6 +19,26 @@ _LAZY = {"MultiDGDAdapter": "._adapter",
 
 
 def __getattr__(name):
+    """Lazily import the torch-backed public symbols on first access (PEP 562).
+
+    Keeps ``import multidgd_e2g`` and the I/O helpers usable without importing torch/multiDGD,
+    so ``prep`` and the format converters run on a machine without the GPU stack.
+
+    Parameters
+    ----------
+    name : str
+        Attribute being accessed on the package.
+
+    Returns
+    -------
+    Any
+        The resolved attribute.
+
+    Raises
+    ------
+    AttributeError
+        If ``name`` is not a lazily exported symbol.
+    """
     if name in _LAZY:
         import importlib
         mod = importlib.import_module(_LAZY[name], __name__)

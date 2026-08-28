@@ -26,10 +26,22 @@ from . import scoring
 
 
 def _log(msg):
+    """Print a progress line, flushing so it appears immediately under a scheduler."""
     print(msg, flush=True)
 
 
 def link(args):
+    """Run the ``link`` subcommand: perturb a trained model and score enhancer-gene links.
+
+    Loads the flat export, loads or trains the multiDGD model, learns per-cell
+    representations over all cells, runs the in-silico perturbation (or reuses cached deltas
+    with ``--reuse-deltas``), scores under the chosen null, and writes the p2g table.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed ``link`` arguments (see :func:`build_parser`).
+    """
     from . import perturbation
     from ._adapter import MultiDGDAdapter
     adata, genes, peaks, pairs = e2g_io.read_export(args.input_dir)
@@ -127,6 +139,13 @@ def prep(args):
 
 
 def build_parser():
+    """Build the ``multidgd-e2g`` argument parser with the ``prep`` and ``link`` subcommands.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Parser whose selected subcommand sets ``args.func`` to :func:`prep` or :func:`link`.
+    """
     p = argparse.ArgumentParser(prog="multidgd-e2g", description="Genome-wide enhancer-gene "
                                 "linking via multiDGD in-silico perturbation.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -177,6 +196,13 @@ def build_parser():
 
 
 def main(argv=None):
+    """Entry point for the ``multidgd-e2g`` console script.
+
+    Parameters
+    ----------
+    argv : list of str or None, optional
+        Argument vector to parse; defaults to ``sys.argv`` when None.
+    """
     args = build_parser().parse_args(argv)
     args.func(args)
 
