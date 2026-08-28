@@ -30,7 +30,7 @@ multidgd-e2g link \
   --save-dir   "$SAVE_DIR" \
   --model-name dgd_cd14_e2g \
   --direction  gene2peak \
-  --bg         random \
+  --bg         matched \
   --batch-correct \
   --latent-dim 20 \
   --cell-batch 8192 \

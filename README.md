@@ -152,7 +152,7 @@ multidgd-e2g link \
   --save-dir   model_dir \        # model checkpoint + delta cache are written here
   --model-name dgd_mydata \
   --direction  gene2peak \        # silence gene -> read peaks (or peak2gene)
-  --bg         random \           # null background (random or accessibility-matched)
+  --bg         matched \          # null background: accessibility-matched (default) or random
   --cell-batch 8192 \             # cells per decode chunk (set as large as the GPU allows)
   --out        mydata_e2g.tsv
 ```
@@ -172,7 +172,7 @@ Deltas are cached, so changing the null/sidedness re-runs only the (CPU) scoring
 
 ```bash
 multidgd-e2g link --reuse-deltas --input-dir export_dir --save-dir model_dir \
-  --model-name dgd_mydata --bg matched --out mydata_e2g_matched.tsv
+  --model-name dgd_mydata --bg random --out mydata_e2g_random.tsv
 ```
 
 ---
@@ -220,8 +220,8 @@ more silenced features (peaks ≫ genes), so it is proportionally slower.
 
 | Background | Description |
 |------------|-------------|
-| `random` (default) | Each candidate's delta is z-scored against a random sample of distal (non-cis) response features. |
-| `matched` | Background drawn from the candidate's own baseline-accessibility bin (the model's softmax share), controlling for feature accessibility. |
+| `matched` (default) | Background drawn from the candidate's own baseline-accessibility bin (the model's softmax share), controlling for peak accessibility — the same control Signac/FigR apply. Prevents high-accessibility promoter peaks from scoring as significant merely for being accessible. |
+| `random` | Each candidate's delta is z-scored against a random sample of distal (non-cis) response features. More sensitive, but its rankings are inflated by promoter/high-accessibility peaks; use for benchmark parity with parametric methods, not as the discovery default. |
 
 ### `--cell-batch` — memory/speed knob
 
@@ -260,9 +260,9 @@ model entirely and re-scores from the cached deltas on CPU.
   latent to fit the counterfactual, decode, and record the mean predicted change (`delta`) in
   every partner-modality feature — over cells where that feature is detected. Run in cell chunks
   so memory is bounded; the chunked result equals the whole-matrix result up to float round-off.
-- **Scoring.** An empirical background null: z-score each cis target's `delta` against a
-  background of distal features (`--bg random`, the default) or the candidate's own
-  accessibility bin (`--bg matched`). `pvalue` is 1-sided on the
+- **Scoring.** An empirical background null: z-score each cis target's `delta` against the
+  candidate's own accessibility bin (`--bg matched`, the default) or a background of random
+  distal features (`--bg random`). `pvalue` is 1-sided on the
   activating tail (silencing an activator lowers the partner's predicted signal), with a
   2-sided variant and BH FDR. No distributional assumption on the raw `delta`.
 

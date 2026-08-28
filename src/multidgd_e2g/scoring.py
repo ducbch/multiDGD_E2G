@@ -18,13 +18,15 @@ EPS = 1e-12
 
 
 def score_from_deltas(D, kept, p0, groups, resp_index, direction,
-                      n_bg=500, seed=0, match_bg=False, n_bins=25, log=print):
+                      n_bg=500, seed=0, match_bg=True, n_bins=25, log=print):
     """Turn per-silenced-feature deltas into per-pair z / p-values under the chosen null.
 
-    match_bg=False (default): random distal-feature background (per silenced feature).
-    match_bg=True: accessibility-matched background -- bin response features by log(p0)
+    match_bg=True (default): accessibility-matched background -- bin response features by log(p0)
       (the model's baseline softmax share, the scale the delta lives on) and draw each
-      candidate's background from its own bin.
+      candidate's background from its own bin. Controls for peak accessibility (like Signac/FigR),
+      so high-accessibility promoter peaks are not scored as significant merely for being accessible.
+    match_bg=False: random distal-feature background (per silenced feature). More sensitive, but its
+      rankings are inflated by promoter/high-accessibility peaks; kept for benchmark parity.
 
     Returns a list of dict records: peak, gene, delta, zscore, pvalue, twosided_pvalue.
     """

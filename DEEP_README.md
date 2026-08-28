@@ -109,8 +109,8 @@ speed.
 ## 4. Calibrated association scoring
 
 `score_from_deltas` (in `scoring.py`) turns the per-feature deltas into a per-pair significance
-statistic. The design uses an empirical background null (random distal features by default;
-optionally accessibility-matched), so the raw `delta` need not follow any parametric distribution.
+statistic. The design uses an empirical background null (accessibility-matched by default;
+optionally random distal features), so the raw `delta` need not follow any parametric distribution.
 
 For a silenced feature with cis targets and a background set of distal response features:
 
@@ -123,11 +123,15 @@ For a silenced feature with cis targets and a background set of distal response 
 
 **Background choices** (`--bg`):
 
-- `random` — a random sample of `n_bg` non-cis response features per silenced feature. This also absorbs
-  the global softmax mass shift that silencing induces across all features.
-- `matched` — bin response features by `log(p0)`, where `p0` is the model's baseline predicted
-  softmax share (the scale the delta lives on), and draw each candidate's background from its
-  own bin. This controls for baseline accessibility.
+- `matched` (default) — bin response features by `log(p0)`, where `p0` is the model's baseline
+  predicted softmax share (the scale the delta lives on), and draw each candidate's background from
+  its own bin. This controls for baseline accessibility — the same confounder Signac/FigR match on —
+  so a high-accessibility promoter peak is compared against other high-accessibility peaks rather
+  than random distal ones, and is not called significant merely for being accessible.
+- `random` — a random sample of `n_bg` non-cis response features per silenced feature. This also
+  absorbs the global softmax mass shift that silencing induces across all features. It is more
+  sensitive, but does **not** control for accessibility, so its rankings are inflated by
+  promoter/high-accessibility peaks; kept for benchmark parity with the parametric methods.
 
 Scoring is pure CPU and **null-agnostic with respect to the cached deltas** — changing `--bg`,
 `n_bg`, the number of bins, or the sidedness re-runs only this step (Section 6).

@@ -50,5 +50,6 @@ train/perturbation steps are shown as commented reference cells.
 ## Notes
 
 - The saved model is ~150 MB and the link table can be large; keep them outside git.
-- For the accessibility-matched null or the reverse direction, re-run with `--bg matched` or
-  `--direction peak2gene`.
+- The run uses the accessibility-matched null (`--bg matched`, the default). For the random-distal
+  null (benchmark parity) or the reverse direction, re-run with `--bg random` or
+  `--direction peak2gene` (re-scoring only, `--reuse-deltas`, no GPU).

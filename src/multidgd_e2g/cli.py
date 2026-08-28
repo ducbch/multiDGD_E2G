@@ -4,7 +4,7 @@
         [--observable <col>] [--covariate <col>] [--gtf g.gtf | --pairs p.csv]
 
     multidgd-e2g link --input-dir <export> --save-dir <models> --model-name <name> \
-        [--train | --load] [--direction gene2peak|peak2gene] [--bg random|matched] \
+        [--train | --load] [--direction gene2peak|peak2gene] [--bg matched|random] \
         [--cell-batch 8192] [--reuse-deltas] --out <links.tsv>
 
 `prep` converts a .h5ad/.h5mu into the flat export directory (the Seurat path is
@@ -156,7 +156,11 @@ def build_parser():
     g.add_argument("--load", dest="load", action="store_true", help="load cached model (default)")
     lk.set_defaults(load=True)
     lk.add_argument("--direction", choices=["gene2peak", "peak2gene"], default="gene2peak")
-    lk.add_argument("--bg", choices=["random", "matched"], default="random")
+    lk.add_argument("--bg", choices=["matched", "random"], default="matched",
+                    help="null background. 'matched' (default): accessibility-matched, "
+                         "controls for peak accessibility (like Signac/FigR). 'random': random "
+                         "distal peaks -- more sensitive but its rankings are inflated by "
+                         "promoter/high-accessibility peaks; use for benchmark parity only.")
     lk.add_argument("--batch-correct", action="store_true")
     lk.add_argument("--latent-dim", type=int, default=20)
     lk.add_argument("--n-epochs", type=int, default=500)
