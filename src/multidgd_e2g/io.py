@@ -58,7 +58,7 @@ def build_anndata(rna_counts, atac_counts, genes, peaks, barcodes, obs,
         obs["observable"] = "cells"
     if covariate is not None and covariate in obs.columns:
         obs["covariate_sample"] = obs[covariate].astype(str)
-    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata = ad.AnnData(X=X.astype(np.float32), obs=obs, var=var)
     adata.var_names_make_unique()
     return adata
 
@@ -89,7 +89,7 @@ def read_export(in_dir):
     var["modality"] = ["GEX"] * len(genes) + ["ATAC"] * len(peaks)
     var["feature_types"] = var["modality"]
     obs.index = barcodes
-    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata = ad.AnnData(X=X.astype(np.float32), obs=obs, var=var)
     adata.var_names_make_unique()
     pairs_path = os.path.join(in_dir, "pairs.csv")
     pairs = pd.read_csv(pairs_path) if os.path.exists(pairs_path) else None
@@ -245,7 +245,7 @@ def read_h5mu(path, rna="rna", atac="atac"):
     var = pd.DataFrame(index=list(rna_ad.var_names) + list(atac_ad.var_names))
     var["modality"] = ["GEX"] * rna_ad.n_vars + ["ATAC"] * atac_ad.n_vars
     var["feature_types"] = var["modality"]
-    adata = ad.AnnData(X=X, obs=md.obs.copy(), var=var)
+    adata = ad.AnnData(X=X.astype(np.float32), obs=md.obs.copy(), var=var)
     adata.var_names_make_unique()
     return adata
 

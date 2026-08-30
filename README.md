@@ -70,8 +70,9 @@ association score is **flat with distance to the TSS**, and links are no longer 
 The alternative `--bg random` skips this correction and is kept only for benchmark comparison.
 
 See [DEEP_README](DEEP_README.md) for the exact procedure and how baseline accessibility is defined;
-the [workflow notebook](workflow/) shows a worked, eQTL-validated example (a distal enhancer the
-random null misses). Perturbation scores are still modest predictors genome-wide, so treat ranked
+the [workflow notebook](workflow/) shows a worked, eQTL-validated example (a distal enhancer that
+survives correction only under the matched null -- the random null's version of the same call
+misses it entirely). Perturbation scores are still modest predictors genome-wide, so treat ranked
 links as candidates to confirm with orthogonal evidence.
 
 ---

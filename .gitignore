@@ -1,3 +1,6 @@
+# Claude Code
+.claude/
+
 # byte-compiled / caches
 __pycache__/
 *.py[cod]

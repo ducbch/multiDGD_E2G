@@ -110,9 +110,15 @@ For a silenced feature with cis targets and a background set of distal response 
 
 - **z-score** `z = (mean(delta_bg) − delta_cis) / sd(delta_bg)`. The sign convention makes an
   activating link (silencing an activator lowers the partner's predicted signal, so
-  `delta_cis < 0`) yield a large **positive** `z`.
-- **p-value** `pvalue = P(Z > z)` (1-sided, activating tail), with a 2-sided variant
-  `2·P(Z > |z|)`.
+  `delta_cis < 0`) yield a large **positive** `z`. `z` is a descriptive standardization only —
+  it does not by itself say how rare a value is (see below), and is not comparable across
+  candidates whose backgrounds have different shapes.
+- **p-value** is read directly off `delta_cis`'s rank in its own background sample, extrapolated
+  past that sample's resolution with a Generalized Pareto tail fit (peaks-over-threshold) rather
+  than assumed from `z` via a normal table. The background is measurably heavier-tailed than
+  Gaussian (real runs show excess kurtosis up to ~3.5), so a normal-tail p-value from `z` alone
+  understates the true tail probability -- by 1-2 orders of magnitude typically, more for extreme
+  `z`. A 2-sided variant applies the same tail-fit to both directions.
 - **FDR** Benjamini-Hochberg over all pairs.
 
 The two `--bg` backgrounds — `matched` (default) and `random` — and why the default matters are
@@ -156,7 +162,8 @@ is what cancels the accessibility-driven magnitude baked into `ΔX̂`.
 
 1. draw the background from peaks in `j`'s own `log p0` bin (excluding `g`'s cis peaks; widen to
    neighbouring bins if fewer than `n_bg` remain) → background deltas `d_bg`;
-2. `z_gj = ( mean(d_bg) − ΔX̂_gj ) / sd(d_bg)`, and `pvalue = P(Z > z_gj)` (one-sided).
+2. `z_gj = ( mean(d_bg) − ΔX̂_gj ) / sd(d_bg)` (descriptive), and `pvalue` from `ΔX̂_gj`'s rank in
+   `d_bg`, tail-extrapolated as above (one-sided).
 
 Because `j` is compared only against peaks of **equal predicted accessibility**, a large `|ΔX̂|`
 that is merely a consequence of high `p0` no longer reads as significant. Empirically this makes the
